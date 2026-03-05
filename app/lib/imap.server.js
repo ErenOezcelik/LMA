@@ -117,7 +117,7 @@ export async function fetchEmails(since = null) {
 
     let uids;
     try {
-      uids = await client.search(searchCriteria);
+      uids = await client.search(searchCriteria, { uid: true });
     } catch {
       // Fallback: fetch last 200 messages if SEARCH fails
       const startSeq = Math.max(1, totalMessages - 200 + 1);
@@ -133,13 +133,19 @@ export async function fetchEmails(since = null) {
 
     // Fetch envelope + bodyStructure
     const messages = [];
-    for await (const msg of client.fetch(uids, {
+    const uidRange = uids.length > 100
+      ? `${Math.min(...uids)}:${Math.max(...uids)}`
+      : uids.join(",");
+
+    for await (const msg of client.fetch(uidRange, {
       envelope: true,
       bodyStructure: true,
       uid: true,
     }, { uid: true })) {
       messages.push(msg);
     }
+
+    console.log(`IMAP: Fetched structure for ${messages.length} messages`);
 
     const emails = [];
 
@@ -196,7 +202,7 @@ export async function fetchEmails(since = null) {
           receivedDate: env.date || new Date(),
         });
       } catch (err) {
-        console.error(`IMAP: Failed to process message ${msg.uid}: ${err.message}`);
+        console.error(`IMAP: Failed to process message ${msg.uid}: ${err.message}\n${err.stack}`);
       }
     }
 
