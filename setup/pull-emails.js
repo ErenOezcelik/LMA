@@ -1,11 +1,14 @@
 /**
- * Pull the latest emails via IMAP and save as individual JSON files.
+ * Pull the latest emails via IMAP from an Exchange journal mailbox.
  *
- * Run on the VM:
- *   node setup/pull-emails.js
+ * Exchange journal format:
+ *   Part 1 = text/plain summary (just headers — useless)
+ *   Part 2 = message/rfc822 (the actual original email)
+ *     Part 2.1 = text/html or text/plain (the real body)
+ *     Part 2.2+ = attachments
  *
- * Then scp from your local machine:
- *   scp -r user@vm-host:/path/to/KI-Tagesmappe/setup/emails ./setup/emails
+ * Run on the VM:  node setup/pull-emails.js
+ * Then scp:       scp -r user@vm:/path/setup/emails ./setup/emails
  */
 
 import "dotenv/config";
@@ -46,42 +49,82 @@ async function streamToString(stream) {
   return Buffer.concat(chunks).toString("utf-8");
 }
 
-// Recursively find text parts in a BODYSTRUCTURE
-function findTextParts(struct, path = []) {
+// Check if this is a journal wrapper (part 1 = summary, part 2 = message/rfc822)
+function isJournalMessage(struct) {
+  if (!struct?.childNodes || struct.childNodes.length < 2) return false;
+  return struct.childNodes.some((n) => n.type === "message/rfc822");
+}
+
+// Find the inner message's body parts from a journal structure
+function findInnerBodyParts(struct) {
+  for (const node of struct.childNodes || []) {
+    if (node.type === "message/rfc822" && node.childNodes) {
+      return findAllTextParts(node);
+    }
+  }
+  return [];
+}
+
+// Find all text/plain and text/html parts recursively, using the "part" field from BODYSTRUCTURE
+function findAllTextParts(struct) {
   const parts = [];
   if (!struct) return parts;
 
   if (Array.isArray(struct.childNodes)) {
-    for (let i = 0; i < struct.childNodes.length; i++) {
-      parts.push(...findTextParts(struct.childNodes[i], [...path, i + 1]));
-    }
-  } else {
-    const partPath = path.length ? path.join(".") : "1";
-    if (struct.type === "text/plain") {
-      parts.push({ type: "text", part: partPath });
-    } else if (struct.type === "text/html") {
-      parts.push({ type: "html", part: partPath });
+    for (const child of struct.childNodes) {
+      parts.push(...findAllTextParts(child));
     }
   }
+
+  if (struct.part && struct.type === "text/plain") {
+    parts.push({ type: "text", part: struct.part, size: struct.size || 0 });
+  } else if (struct.part && struct.type === "text/html") {
+    parts.push({ type: "html", part: struct.part, size: struct.size || 0 });
+  }
+
   return parts;
 }
 
-// Find attachment names from BODYSTRUCTURE
-function findAttachments(struct) {
+// Find attachment names from BODYSTRUCTURE (skip journal summary part 1)
+function findAttachments(struct, isJournal) {
   const attachments = [];
   if (!struct) return attachments;
 
-  if (Array.isArray(struct.childNodes)) {
-    for (const child of struct.childNodes) {
-      attachments.push(...findAttachments(child));
+  // For journal messages, only look inside the rfc822 part
+  const searchNode = isJournal
+    ? struct.childNodes?.find((n) => n.type === "message/rfc822")
+    : struct;
+
+  function walk(node) {
+    if (!node) return;
+    if (Array.isArray(node.childNodes)) {
+      for (const child of node.childNodes) {
+        walk(child);
+      }
     }
-  } else if (struct.disposition === "attachment" || (struct.type && !struct.type.startsWith("text/"))) {
-    const name = struct.dispositionParameters?.filename
-      || struct.parameters?.name
-      || null;
-    if (name) attachments.push(name);
+    if (node.disposition === "attachment" || node.disposition === "inline") {
+      const name = node.dispositionParameters?.filename
+        || node.parameters?.name
+        || null;
+      // Skip inline images without useful names
+      if (name && !name.startsWith("image00")) {
+        attachments.push(name);
+      }
+    }
   }
+
+  walk(searchNode);
   return attachments;
+}
+
+// Get the real envelope from a journal message (the inner rfc822's envelope)
+function getInnerEnvelope(struct, outerEnvelope) {
+  for (const node of struct.childNodes || []) {
+    if (node.type === "message/rfc822" && node.envelope) {
+      return node.envelope;
+    }
+  }
+  return outerEnvelope;
 }
 
 async function main() {
@@ -123,7 +166,7 @@ async function main() {
 
     let saved = 0;
 
-    // First pass: get envelope + bodyStructure for all messages
+    // First pass: get envelope + bodyStructure
     const messages = [];
     for await (const msg of client.fetch(range, {
       envelope: true,
@@ -133,44 +176,50 @@ async function main() {
       messages.push(msg);
     }
 
-    console.log(`Got ${messages.length} message headers. Downloading bodies...`);
+    console.log(`Got ${messages.length} messages. Downloading bodies...`);
 
-    // Second pass: download body content for each message
     for (const msg of messages) {
       try {
-        const env = msg.envelope;
-        const textParts = findTextParts(msg.bodyStructure);
-        const attachments = findAttachments(msg.bodyStructure);
+        const journal = isJournalMessage(msg.bodyStructure);
+        const env = journal
+          ? getInnerEnvelope(msg.bodyStructure, msg.envelope)
+          : msg.envelope;
+
+        // Find text parts — for journal msgs, look inside the rfc822 part
+        const textParts = journal
+          ? findInnerBodyParts(msg.bodyStructure)
+          : findAllTextParts(msg.bodyStructure);
+
+        const attachments = findAttachments(msg.bodyStructure, journal);
 
         let bodyText = "";
 
-        // Try plain text first, then HTML
-        const plainPart = textParts.find((p) => p.type === "text");
+        // Prefer HTML for journal messages (Exchange usually only has HTML inside)
+        // For regular messages, prefer plain text
+        const plainPart = textParts.find((p) => p.type === "text" && p.size > 300);
         const htmlPart = textParts.find((p) => p.type === "html");
 
-        if (plainPart) {
-          const { content } = await client.download(msg.seq.toString(), plainPart.part, { uid: false });
-          bodyText = await streamToString(content);
+        const preferredPart = journal ? (htmlPart || plainPart) : (plainPart || htmlPart);
+
+        if (preferredPart) {
+          const { content } = await client.download(msg.seq.toString(), preferredPart.part, { uid: false });
+          const raw = await streamToString(content);
+          bodyText = preferredPart.type === "html" ? stripHtml(raw) : raw;
         }
 
-        if (!bodyText && htmlPart) {
-          const { content } = await client.download(msg.seq.toString(), htmlPart.part, { uid: false });
-          const html = await streamToString(content);
-          bodyText = stripHtml(html);
-        }
-
-        // If still no body, try downloading the entire first part
+        // Fallback: try all text parts
         if (!bodyText) {
-          try {
-            const { content } = await client.download(msg.seq.toString(), "1", { uid: false });
-            const raw = await streamToString(content);
-            if (raw.includes("<") && raw.includes(">")) {
-              bodyText = stripHtml(raw);
-            } else {
-              bodyText = raw;
+          for (const part of textParts) {
+            try {
+              const { content } = await client.download(msg.seq.toString(), part.part, { uid: false });
+              const raw = await streamToString(content);
+              const text = part.type === "html" ? stripHtml(raw) : raw;
+              if (text.length > bodyText.length) {
+                bodyText = text;
+              }
+            } catch {
+              // skip failed parts
             }
-          } catch {
-            bodyText = "";
           }
         }
 
