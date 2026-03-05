@@ -1,18 +1,16 @@
 /**
- * Pull the latest 100 emails from Exchange via EWS and save as individual JSON files.
+ * Pull the latest 100 emails via IMAP and save as individual JSON files.
  *
  * Run on the VM:
  *   node setup/pull-emails.js
  *
  * Then scp from your local machine:
  *   scp -r user@vm-host:/path/to/KI-Tagesmappe/setup/emails ./setup/emails
- *
- * Or use the companion script:
- *   ./setup/fetch-emails.sh user@vm-host /path/to/KI-Tagesmappe
  */
 
 import "dotenv/config";
-import EWS from "node-ews";
+import { ImapFlow } from "imapflow";
+import { simpleParser } from "mailparser";
 import { mkdirSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -22,115 +20,86 @@ const OUTPUT_DIR = join(__dirname, "emails");
 const MAX_EMAILS = 100;
 
 async function main() {
-  const ews = new EWS({
-    username: process.env.EWS_USERNAME,
-    password: process.env.EWS_PASSWORD,
-    host: process.env.EWS_HOST,
-    auth: process.env.EWS_AUTH || "ntlm",
-  });
+  const host = process.env.IMAP_HOST || process.env.EWS_HOST?.replace("https://", "").replace("http://", "");
+  const user = process.env.IMAP_USERNAME || process.env.EWS_USERNAME;
+  const pass = process.env.IMAP_PASSWORD || process.env.EWS_PASSWORD;
+  const port = parseInt(process.env.IMAP_PORT || "993", 10);
+  const tls = process.env.IMAP_TLS !== "false";
 
-  console.log(`Connecting to ${process.env.EWS_HOST}...`);
-
-  // Find latest emails
-  const findResult = await ews.run("FindItem", {
-    attributes: { Traversal: "Shallow" },
-    ItemShape: { BaseShape: "IdOnly" },
-    IndexedPageItemView: {
-      attributes: {
-        MaxEntriesReturned: String(MAX_EMAILS),
-        Offset: "0",
-        BasePoint: "Beginning",
-      },
-    },
-    SortOrder: {
-      FieldOrder: {
-        attributes: { Order: "Descending" },
-        FieldURI: { attributes: { FieldURI: "item:DateTimeReceived" } },
-      },
-    },
-    ParentFolderIds: {
-      DistinguishedFolderId: { attributes: { Id: "inbox" } },
-    },
-  });
-
-  const items =
-    findResult?.ResponseMessages?.FindItemResponseMessage?.RootFolder?.Items
-      ?.Message || [];
-  const messages = Array.isArray(items) ? items : [items];
-
-  if (!messages.length || !messages[0]?.ItemId) {
-    console.log("No emails found.");
-    return;
+  if (!host || !user || !pass) {
+    console.error("Missing credentials. Set IMAP_HOST, IMAP_USERNAME, IMAP_PASSWORD in .env");
+    console.error("Or it will fall back to EWS_HOST/EWS_USERNAME/EWS_PASSWORD");
+    process.exit(1);
   }
 
-  console.log(`Found ${messages.length} emails. Fetching details...`);
+  console.log(`Connecting to ${host}:${port} as ${user}...`);
 
-  mkdirSync(OUTPUT_DIR, { recursive: true });
+  const client = new ImapFlow({
+    host,
+    port,
+    secure: tls,
+    auth: { user, pass },
+    tls: { rejectUnauthorized: false },
+    logger: false,
+  });
 
-  let saved = 0;
+  await client.connect();
+  console.log("Connected.");
 
-  for (const msg of messages) {
-    try {
-      const result = await ews.run("GetItem", {
-        ItemShape: {
-          BaseShape: "Default",
-          BodyType: "Text",
-          AdditionalProperties: {
-            FieldURI: [
-              { attributes: { FieldURI: "item:Body" } },
-              { attributes: { FieldURI: "item:DateTimeReceived" } },
-              { attributes: { FieldURI: "message:From" } },
-            ],
-          },
-        },
-        ItemIds: {
-          ItemId: {
-            attributes: {
-              Id: msg.ItemId.attributes.Id,
-              ChangeKey: msg.ItemId.attributes.ChangeKey,
-            },
-          },
-        },
-      });
+  const lock = await client.getMailboxLock("INBOX");
 
-      const detail =
-        result?.ResponseMessages?.GetItemResponseMessage?.Items?.Message;
-      if (!detail) continue;
+  try {
+    const totalMessages = client.mailbox.exists;
+    console.log(`Inbox has ${totalMessages} messages. Fetching latest ${MAX_EMAILS}...`);
 
-      const bodyText =
-        typeof detail.Body === "string"
-          ? detail.Body
-          : detail.Body?.$value || detail.Body?._ || "";
+    const startSeq = Math.max(1, totalMessages - MAX_EMAILS + 1);
+    const range = `${startSeq}:*`;
 
-      const email = {
-        exchangeId: msg.ItemId.attributes.Id,
-        subject: detail.Subject || "(Kein Betreff)",
-        sender: detail.From?.Mailbox?.EmailAddress || "",
-        senderName: detail.From?.Mailbox?.Name || "",
-        bodyText,
-        bodyPreview: bodyText.substring(0, 200).replace(/\s+/g, " ").trim(),
-        receivedDate: detail.DateTimeReceived || new Date().toISOString(),
-      };
+    mkdirSync(OUTPUT_DIR, { recursive: true });
 
-      const filename = `${String(saved + 1).padStart(3, "0")}_${email.subject
-        .replace(/[^a-zA-Z0-9äöüÄÖÜß\-_ ]/g, "")
-        .substring(0, 60)
-        .trim()}.json`;
+    let saved = 0;
 
-      writeFileSync(
-        join(OUTPUT_DIR, filename),
-        JSON.stringify(email, null, 2),
-        "utf-8"
-      );
+    for await (const msg of client.fetch(range, {
+      source: true,
+      envelope: true,
+      uid: true,
+    })) {
+      try {
+        const parsed = await simpleParser(msg.source);
 
-      saved++;
-      if (saved % 10 === 0) console.log(`  ${saved}/${messages.length}...`);
-    } catch (err) {
-      console.error(`  Failed to fetch email: ${err.message}`);
+        const email = {
+          exchangeId: String(msg.uid),
+          subject: parsed.subject || "(Kein Betreff)",
+          sender: parsed.from?.value?.[0]?.address || "",
+          senderName: parsed.from?.value?.[0]?.name || "",
+          bodyText: parsed.text || "",
+          bodyPreview: (parsed.text || "").substring(0, 200).replace(/\s+/g, " ").trim(),
+          receivedDate: parsed.date?.toISOString() || new Date().toISOString(),
+        };
+
+        const filename = `${String(saved + 1).padStart(3, "0")}_${email.subject
+          .replace(/[^a-zA-Z0-9äöüÄÖÜß\-_ ]/g, "")
+          .substring(0, 60)
+          .trim()}.json`;
+
+        writeFileSync(
+          join(OUTPUT_DIR, filename),
+          JSON.stringify(email, null, 2),
+          "utf-8"
+        );
+
+        saved++;
+        if (saved % 10 === 0) console.log(`  ${saved}...`);
+      } catch (err) {
+        console.error(`  Failed to parse email: ${err.message}`);
+      }
     }
-  }
 
-  console.log(`\nDone. ${saved} emails saved to ${OUTPUT_DIR}/`);
+    console.log(`\nDone. ${saved} emails saved to ${OUTPUT_DIR}/`);
+  } finally {
+    lock.release();
+    await client.logout();
+  }
 }
 
 main().catch((err) => {
