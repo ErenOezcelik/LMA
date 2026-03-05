@@ -17,7 +17,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_DIR = join(__dirname, "emails");
-const MAX_EMAILS = 100;
+const MAX_EMAILS = 10;
 
 async function main() {
   const host = process.env.IMAP_HOST || process.env.EWS_HOST?.replace("https://", "").replace("http://", "");
