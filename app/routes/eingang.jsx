@@ -1,5 +1,6 @@
 import { useLoaderData, useSearchParams } from "react-router";
 import { prisma } from "../lib/db.server.js";
+import { fetchEmails } from "../lib/imap.server.js";
 import EingangEmailCard from "../components/EingangEmailCard.jsx";
 
 export function meta() {
@@ -41,6 +42,54 @@ export async function loader({ request }) {
   const fromDate = new Date(fromParam);
   const toDate = new Date(toParam);
 
+  // Pull fresh emails from IMAP for this range
+  try {
+    const imapEmails = await fetchEmails(fromDate);
+
+    // Filter to the requested range
+    const inRange = imapEmails.filter((e) => {
+      const d = new Date(e.receivedDate);
+      return d >= fromDate && d <= toDate;
+    });
+
+    // Dedup and insert new ones
+    if (inRange.length > 0) {
+      const existingIds = new Set(
+        (await prisma.email.findMany({
+          where: { exchangeId: { in: inRange.map((e) => e.exchangeId) } },
+          select: { exchangeId: true },
+        })).map((e) => e.exchangeId)
+      );
+
+      const newEmails = inRange.filter((e) => !existingIds.has(e.exchangeId));
+
+      for (const email of newEmails) {
+        await prisma.email.create({
+          data: {
+            exchangeId: email.exchangeId,
+            subject: email.subject,
+            sender: email.sender,
+            senderName: email.senderName,
+            bodyText: email.bodyText,
+            bodyHtml: email.bodyHtml || "",
+            bodyPreview: email.bodyPreview,
+            receivedDate: new Date(email.receivedDate),
+            bucket: "rest",
+            importanceScore: 0,
+            isEscalated: false,
+          },
+        });
+      }
+
+      if (newEmails.length > 0) {
+        console.log(`Eingang: ${newEmails.length} new emails imported from IMAP`);
+      }
+    }
+  } catch (err) {
+    console.error("IMAP fetch failed:", err.message);
+  }
+
+  // Now query the DB
   const emails = await prisma.email.findMany({
     where: {
       receivedDate: {
