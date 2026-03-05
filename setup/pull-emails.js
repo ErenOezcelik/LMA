@@ -19,7 +19,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_DIR = join(__dirname, "emails");
-const MAX_EMAILS = 10;
+const MAX_EMAILS = 100;
 
 function stripHtml(html) {
   return html
