@@ -1,4 +1,4 @@
-import { useLoaderData, useSearchParams } from "react-router";
+import { useLoaderData, useNavigation, useSearchParams } from "react-router";
 import { prisma } from "../lib/db.server.js";
 import { fetchEmails } from "../lib/imap.server.js";
 import EingangEmailCard from "../components/EingangEmailCard.jsx";
@@ -19,7 +19,6 @@ function defaultRange() {
   const todayEnd = new Date(now);
   todayEnd.setHours(23, 59, 0, 0);
 
-  // Format as local datetime-local string (YYYY-MM-DDTHH:MM)
   const fmt = (d) => {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -36,23 +35,32 @@ export async function loader({ request }) {
   const url = new URL(request.url);
   const defaults = defaultRange();
 
-  const fromParam = url.searchParams.get("from") || defaults.from;
-  const toParam = url.searchParams.get("to") || defaults.to;
+  const fromParam = url.searchParams.get("from");
+  const toParam = url.searchParams.get("to");
+
+  // Only fetch when user explicitly clicked "Anzeigen" (params present)
+  if (!fromParam && !toParam) {
+    return {
+      emails: [],
+      from: defaults.from,
+      to: defaults.to,
+      totalCount: 0,
+      fetched: false,
+    };
+  }
 
   const fromDate = new Date(fromParam);
   const toDate = new Date(toParam);
 
-  // Pull fresh emails from IMAP for this range
+  // Pull fresh emails from IMAP
   try {
     const imapEmails = await fetchEmails(fromDate);
 
-    // Filter to the requested range
     const inRange = imapEmails.filter((e) => {
       const d = new Date(e.receivedDate);
       return d >= fromDate && d <= toDate;
     });
 
-    // Dedup and insert new ones
     if (inRange.length > 0) {
       const existingIds = new Set(
         (await prisma.email.findMany({
@@ -89,7 +97,6 @@ export async function loader({ request }) {
     console.error("IMAP fetch failed:", err.message);
   }
 
-  // Now query the DB
   const emails = await prisma.email.findMany({
     where: {
       receivedDate: {
@@ -105,12 +112,16 @@ export async function loader({ request }) {
     from: fromParam,
     to: toParam,
     totalCount: emails.length,
+    fetched: true,
   };
 }
 
 export default function Eingang() {
-  const { emails, from, to, totalCount } = useLoaderData();
+  const { emails, from, to, totalCount, fetched } = useLoaderData();
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigation = useNavigation();
+
+  const isLoading = navigation.state === "loading";
 
   function handleSubmit(e) {
     e.preventDefault();
@@ -152,21 +163,40 @@ export default function Eingang() {
           </div>
           <button
             type="submit"
-            className="px-4 py-2 text-sm font-medium text-white bg-stone-900 rounded-lg hover:bg-stone-800 transition-colors"
+            disabled={isLoading}
+            className="px-4 py-2 text-sm font-medium text-white bg-stone-900 rounded-lg hover:bg-stone-800 transition-colors disabled:opacity-50"
           >
-            Anzeigen
+            {isLoading ? "Laden..." : "Anzeigen"}
           </button>
-          <span className="text-sm text-stone-400 ml-auto">
-            {totalCount} E-Mail{totalCount !== 1 ? "s" : ""}
-          </span>
+          {fetched && (
+            <span className="text-sm text-stone-400 ml-auto">
+              {totalCount} E-Mail{totalCount !== 1 ? "s" : ""}
+            </span>
+          )}
         </form>
 
-        {/* Email list */}
-        {emails.length === 0 ? (
+        {/* Loading state */}
+        {isLoading && (
+          <div className="flex flex-col items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-stone-300 border-t-stone-900 rounded-full animate-spin mb-4" />
+            <p className="text-sm text-stone-500">E-Mails werden geladen...</p>
+          </div>
+        )}
+
+        {/* Content */}
+        {!isLoading && !fetched && (
+          <div className="text-center py-16 text-stone-400">
+            <p className="text-lg">Zeitraum wählen und „Anzeigen" klicken</p>
+          </div>
+        )}
+
+        {!isLoading && fetched && emails.length === 0 && (
           <div className="text-center py-16 text-stone-400">
             <p className="text-lg">Keine E-Mails in diesem Zeitraum</p>
           </div>
-        ) : (
+        )}
+
+        {!isLoading && fetched && emails.length > 0 && (
           <div className="space-y-3">
             {emails.map((email) => (
               <EingangEmailCard key={email.id} email={email} />
