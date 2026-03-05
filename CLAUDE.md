@@ -16,6 +16,4 @@ Its gonna be an internally hosted service, over company vpn.
 We pull the mails, and then make an LLM call to classify the mails through the system prompt together with a lot of edge case rules and modifications. 
 
 ## UI
-Apple style, low cognitive load, professional.
-
-
+Apple style, low cognitive load, professional. 
