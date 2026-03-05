@@ -13,6 +13,19 @@ export function startScheduler() {
 
   console.log(`Starting email sync scheduler (every ${intervalMinutes} minutes)`);
 
+  // Run initial sync immediately on boot
+  console.log("Running initial email sync...");
+  syncEmails()
+    .then((result) => {
+      if (result.skipped) {
+        console.log("Initial sync skipped (already running)");
+      } else {
+        console.log(`Initial sync done: ${result.processed} new emails`);
+      }
+    })
+    .catch((err) => console.error("Initial sync failed:", err.message));
+
+  // Then schedule recurring sync
   task = cron.schedule(`*/${intervalMinutes} * * * *`, async () => {
     console.log(`[${new Date().toLocaleTimeString("de-DE")}] Running scheduled email sync...`);
     try {

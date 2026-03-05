@@ -1,19 +1,13 @@
 import { prisma } from "./db.server.js";
 import { fetchEmails } from "./imap.server.js";
-import { classifyEmail } from "./classifier.server.js";
-
-const BATCH_SIZE = 10;
-const ESCALATION_THRESHOLD = parseFloat(process.env.ESCALATION_THRESHOLD || "0.8");
 
 export async function syncEmails() {
-  // Check if sync is already running
   let syncStatus = await prisma.syncStatus.findUnique({ where: { id: "singleton" } });
   if (syncStatus?.isRunning) {
     console.log("Sync already running, skipping...");
     return { skipped: true };
   }
 
-  // Mark sync as running
   await prisma.syncStatus.upsert({
     where: { id: "singleton" },
     update: { isRunning: true },
@@ -21,13 +15,22 @@ export async function syncEmails() {
   });
 
   try {
-    const since = syncStatus?.lastSyncAt || null;
-    console.log(`Fetching emails since ${since || "today"}...`);
+    let since;
+    if (syncStatus?.lastSyncAt) {
+      since = syncStatus.lastSyncAt;
+    } else {
+      // First run: fetch last 5 days
+      since = new Date();
+      since.setDate(since.getDate() - 5);
+      since.setHours(0, 0, 0, 0);
+    }
+
+    console.log(`Sync: Fetching emails since ${since.toISOString()}...`);
 
     const emails = await fetchEmails(since);
-    console.log(`Found ${emails.length} emails from Exchange`);
+    console.log(`Sync: Found ${emails.length} emails from IMAP`);
 
-    // Dedup: filter out emails already in DB
+    // Dedup against DB
     const existingIds = new Set(
       (
         await prisma.email.findMany({
@@ -38,43 +41,29 @@ export async function syncEmails() {
     );
 
     const newEmails = emails.filter((e) => !existingIds.has(e.exchangeId));
-    console.log(`${newEmails.length} new emails to classify`);
+    console.log(`Sync: ${newEmails.length} new emails to store`);
 
     let processed = 0;
 
-    // Process in batches
-    for (let i = 0; i < newEmails.length; i += BATCH_SIZE) {
-      const batch = newEmails.slice(i, i + BATCH_SIZE);
-
-      const results = await Promise.all(
-        batch.map(async (email) => {
-          const classification = await classifyEmail(email);
-          return { email, classification };
-        })
-      );
-
-      for (const { email, classification } of results) {
-        await prisma.email.create({
-          data: {
-            exchangeId: email.exchangeId,
-            subject: email.subject,
-            sender: email.sender,
-            senderName: email.senderName,
-            bodyText: email.bodyText,
-            bodyHtml: email.bodyHtml || "",
-            bodyPreview: email.bodyPreview,
-            receivedDate: email.receivedDate,
-            bucket: classification.bucket,
-            importanceScore: classification.importanceScore,
-            isEscalated: classification.importanceScore >= ESCALATION_THRESHOLD,
-            rawResponse: classification.rawResponse,
-          },
-        });
-        processed++;
-      }
+    for (const email of newEmails) {
+      await prisma.email.create({
+        data: {
+          exchangeId: email.exchangeId,
+          subject: email.subject,
+          sender: email.sender,
+          senderName: email.senderName,
+          bodyText: email.bodyText,
+          bodyHtml: email.bodyHtml || "",
+          bodyPreview: email.bodyPreview,
+          receivedDate: new Date(email.receivedDate),
+          bucket: "rest",
+          importanceScore: 0,
+          isEscalated: false,
+        },
+      });
+      processed++;
     }
 
-    // Update sync status
     await prisma.syncStatus.update({
       where: { id: "singleton" },
       data: {
@@ -84,10 +73,9 @@ export async function syncEmails() {
       },
     });
 
-    console.log(`Sync complete: ${processed} emails processed`);
+    console.log(`Sync complete: ${processed} new emails stored`);
     return { processed, total: emails.length, newEmails: newEmails.length };
   } catch (err) {
-    // Reset sync status on failure
     await prisma.syncStatus.update({
       where: { id: "singleton" },
       data: { isRunning: false },

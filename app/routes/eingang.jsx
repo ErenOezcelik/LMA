@@ -1,6 +1,5 @@
-import { useLoaderData, useNavigation, useSearchParams } from "react-router";
+import { useLoaderData, useSearchParams, useFetcher } from "react-router";
 import { prisma } from "../lib/db.server.js";
-import { fetchEmails } from "../lib/imap.server.js";
 import EingangEmailCard from "../components/EingangEmailCard.jsx";
 
 export function meta() {
@@ -10,14 +9,19 @@ export function meta() {
   ];
 }
 
+function roundTo5Min(d) {
+  const ms = 5 * 60 * 1000;
+  return new Date(Math.floor(d.getTime() / ms) * ms);
+}
+
 function defaultRange() {
   const now = new Date();
-  const yesterday = new Date(now);
+  const yesterday = roundTo5Min(new Date(now));
   yesterday.setDate(yesterday.getDate() - 1);
   yesterday.setHours(6, 0, 0, 0);
 
-  const todayEnd = new Date(now);
-  todayEnd.setHours(23, 59, 0, 0);
+  const todayEnd = roundTo5Min(new Date(now));
+  todayEnd.setHours(23, 55, 0, 0);
 
   const fmt = (d) => {
     const y = d.getFullYear();
@@ -35,66 +39,26 @@ export async function loader({ request }) {
   const url = new URL(request.url);
   const defaults = defaultRange();
 
-  const fromParam = url.searchParams.get("from");
-  const toParam = url.searchParams.get("to");
-
-  // Only fetch when user explicitly clicked "Anzeigen" (params present)
-  if (!fromParam && !toParam) {
-    return {
-      emails: [],
-      from: defaults.from,
-      to: defaults.to,
-      totalCount: 0,
-      fetched: false,
-    };
-  }
+  const fromParam = url.searchParams.get("from") || defaults.from;
+  const toParam = url.searchParams.get("to") || defaults.to;
+  const hasParams = url.searchParams.has("from");
 
   const fromDate = new Date(fromParam);
   const toDate = new Date(toParam);
 
-  // Pull fresh emails from IMAP
-  try {
-    const imapEmails = await fetchEmails(fromDate);
+  // Get last sync time for display
+  const syncStatus = await prisma.syncStatus.findUnique({ where: { id: "singleton" } });
 
-    const inRange = imapEmails.filter((e) => {
-      const d = new Date(e.receivedDate);
-      return d >= fromDate && d <= toDate;
-    });
-
-    if (inRange.length > 0) {
-      const existingIds = new Set(
-        (await prisma.email.findMany({
-          where: { exchangeId: { in: inRange.map((e) => e.exchangeId) } },
-          select: { exchangeId: true },
-        })).map((e) => e.exchangeId)
-      );
-
-      const newEmails = inRange.filter((e) => !existingIds.has(e.exchangeId));
-
-      for (const email of newEmails) {
-        await prisma.email.create({
-          data: {
-            exchangeId: email.exchangeId,
-            subject: email.subject,
-            sender: email.sender,
-            senderName: email.senderName,
-            bodyText: email.bodyText,
-            bodyHtml: email.bodyHtml || "",
-            bodyPreview: email.bodyPreview,
-            receivedDate: new Date(email.receivedDate),
-            bucket: "rest",
-            importanceScore: 0,
-            isEscalated: false,
-          },
-        });
-      }
-
-      if (newEmails.length > 0) {
-        console.log(`Eingang: ${newEmails.length} new emails imported from IMAP`);
-      }
-    }
-  } catch (err) {
-    console.error("IMAP fetch failed:", err.message);
+  if (!hasParams) {
+    return {
+      emails: [],
+      from: fromParam,
+      to: toParam,
+      totalCount: 0,
+      fetched: false,
+      lastSync: syncStatus?.lastSyncAt?.toISOString() || null,
+      isSyncRunning: syncStatus?.isRunning || false,
+    };
   }
 
   const emails = await prisma.email.findMany({
@@ -113,17 +77,19 @@ export async function loader({ request }) {
     to: toParam,
     totalCount: emails.length,
     fetched: true,
+    lastSync: syncStatus?.lastSyncAt?.toISOString() || null,
+    isSyncRunning: syncStatus?.isRunning || false,
   };
 }
 
 export default function Eingang() {
-  const { emails, from, to, totalCount, fetched } = useLoaderData();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const navigation = useNavigation();
+  const { emails, from, to, totalCount, fetched, lastSync, isSyncRunning } = useLoaderData();
+  const [, setSearchParams] = useSearchParams();
+  const syncFetcher = useFetcher();
 
-  const isLoading = navigation.state === "loading";
+  const isSyncing = syncFetcher.state !== "idle" || isSyncRunning;
 
-  function handleSubmit(e) {
+  function handleShow(e) {
     e.preventDefault();
     const formData = new FormData(e.target);
     setSearchParams({
@@ -132,11 +98,19 @@ export default function Eingang() {
     });
   }
 
+  function handleManualSync() {
+    syncFetcher.submit(null, { method: "post", action: "/api/sync" });
+  }
+
+  const lastSyncText = lastSync
+    ? new Date(lastSync).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })
+    : "noch nie";
+
   return (
     <div className="min-h-screen">
       <div className="max-w-4xl mx-auto px-6 py-8">
         {/* Date/time range picker */}
-        <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-4 mb-8">
+        <form onSubmit={handleShow} className="flex flex-wrap items-end gap-4 mb-6">
           <div>
             <label htmlFor="from" className="block text-xs font-medium text-stone-500 mb-1">
               Von
@@ -145,6 +119,7 @@ export default function Eingang() {
               type="datetime-local"
               id="from"
               name="from"
+              step="300"
               defaultValue={from}
               className="px-3 py-2 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-900/10"
             />
@@ -157,16 +132,16 @@ export default function Eingang() {
               type="datetime-local"
               id="to"
               name="to"
+              step="300"
               defaultValue={to}
               className="px-3 py-2 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-900/10"
             />
           </div>
           <button
             type="submit"
-            disabled={isLoading}
-            className="px-4 py-2 text-sm font-medium text-white bg-stone-900 rounded-lg hover:bg-stone-800 transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-sm font-medium text-white bg-stone-900 rounded-lg hover:bg-stone-800 transition-colors"
           >
-            {isLoading ? "Laden..." : "Anzeigen"}
+            Anzeigen
           </button>
           {fetched && (
             <span className="text-sm text-stone-400 ml-auto">
@@ -175,28 +150,41 @@ export default function Eingang() {
           )}
         </form>
 
-        {/* Loading state */}
-        {isLoading && (
-          <div className="flex flex-col items-center justify-center py-20">
-            <div className="w-8 h-8 border-2 border-stone-300 border-t-stone-900 rounded-full animate-spin mb-4" />
-            <p className="text-sm text-stone-500">E-Mails werden geladen...</p>
-          </div>
-        )}
+        {/* Sync status bar */}
+        <div className="flex items-center gap-3 mb-8 text-xs text-stone-400">
+          <span>Letzter Abruf: {lastSyncText}</span>
+          <button
+            type="button"
+            disabled={isSyncing}
+            onClick={handleManualSync}
+            className="px-3 py-1.5 text-xs font-medium text-stone-600 bg-white border border-stone-200 rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50"
+          >
+            {isSyncing ? (
+              <span className="flex items-center gap-1.5">
+                <span className="w-3 h-3 border-2 border-stone-300 border-t-stone-600 rounded-full animate-spin" />
+                Synchronisiere...
+              </span>
+            ) : (
+              "Jetzt synchronisieren"
+            )}
+          </button>
+        </div>
 
         {/* Content */}
-        {!isLoading && !fetched && (
+        {!fetched && (
           <div className="text-center py-16 text-stone-400">
             <p className="text-lg">Zeitraum wählen und „Anzeigen" klicken</p>
           </div>
         )}
 
-        {!isLoading && fetched && emails.length === 0 && (
+        {fetched && emails.length === 0 && (
           <div className="text-center py-16 text-stone-400">
             <p className="text-lg">Keine E-Mails in diesem Zeitraum</p>
+            <p className="text-sm mt-2">E-Mails werden automatisch alle 5 Minuten synchronisiert</p>
           </div>
         )}
 
-        {!isLoading && fetched && emails.length > 0 && (
+        {fetched && emails.length > 0 && (
           <div className="space-y-3">
             {emails.map((email) => (
               <EingangEmailCard key={email.id} email={email} />
