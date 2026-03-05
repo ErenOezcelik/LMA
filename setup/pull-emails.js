@@ -67,14 +67,34 @@ async function main() {
       try {
         const parsed = await simpleParser(msg.source);
 
+        // Prefer plain text, fall back to stripped HTML
+        let bodyText = parsed.text || "";
+        if (!bodyText && parsed.html) {
+          bodyText = parsed.html
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/&nbsp;/g, " ")
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"')
+            .replace(/&#\d+;/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+        }
+
+        const attachments = (parsed.attachments || []).map((a) => a.filename || "unnamed");
+
         const email = {
           exchangeId: String(msg.uid),
           subject: parsed.subject || "(Kein Betreff)",
           sender: parsed.from?.value?.[0]?.address || "",
           senderName: parsed.from?.value?.[0]?.name || "",
-          bodyText: parsed.text || "",
-          bodyPreview: (parsed.text || "").substring(0, 200).replace(/\s+/g, " ").trim(),
+          bodyText,
+          bodyPreview: bodyText.substring(0, 200).replace(/\s+/g, " ").trim(),
           receivedDate: parsed.date?.toISOString() || new Date().toISOString(),
+          attachments,
         };
 
         const filename = `${String(saved + 1).padStart(3, "0")}_${email.subject
