@@ -2,6 +2,7 @@ import {
   isRouteErrorResponse,
   Links,
   Meta,
+  NavLink,
   Outlet,
   Scripts,
   ScrollRestoration,
@@ -40,7 +41,53 @@ export function Layout({ children }) {
 }
 
 export default function App() {
-  return <Outlet />;
+  return (
+    <>
+      <nav className="border-b border-stone-200 bg-white/80 backdrop-blur-sm sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-6 flex items-center gap-1 h-14">
+          <span className="text-sm font-semibold text-stone-900 mr-6">KI-Tagesmappe</span>
+          <NavLink
+            to="/"
+            end
+            className={({ isActive }) =>
+              `px-3 py-1.5 text-sm rounded-md transition-colors ${
+                isActive
+                  ? "bg-stone-900 text-white"
+                  : "text-stone-500 hover:text-stone-900 hover:bg-stone-100"
+              }`
+            }
+          >
+            Eingang
+          </NavLink>
+          <NavLink
+            to="/tagesmappe"
+            className={({ isActive }) =>
+              `px-3 py-1.5 text-sm rounded-md transition-colors ${
+                isActive
+                  ? "bg-stone-900 text-white"
+                  : "text-stone-500 hover:text-stone-900 hover:bg-stone-100"
+              }`
+            }
+          >
+            Tagesmappe
+          </NavLink>
+          <NavLink
+            to="/settings"
+            className={({ isActive }) =>
+              `ml-auto px-3 py-1.5 text-sm rounded-md transition-colors ${
+                isActive
+                  ? "bg-stone-900 text-white"
+                  : "text-stone-500 hover:text-stone-900 hover:bg-stone-100"
+              }`
+            }
+          >
+            Einstellungen
+          </NavLink>
+        </div>
+      </nav>
+      <Outlet />
+    </>
+  );
 }
 
 export function ErrorBoundary({ error }) {

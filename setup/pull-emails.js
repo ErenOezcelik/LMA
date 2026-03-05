@@ -193,18 +193,22 @@ async function main() {
         const attachments = findAttachments(msg.bodyStructure, journal);
 
         let bodyText = "";
+        let bodyHtml = "";
 
-        // Prefer HTML for journal messages (Exchange usually only has HTML inside)
-        // For regular messages, prefer plain text
         const plainPart = textParts.find((p) => p.type === "text" && p.size > 300);
         const htmlPart = textParts.find((p) => p.type === "html");
 
-        const preferredPart = journal ? (htmlPart || plainPart) : (plainPart || htmlPart);
+        // Download HTML if available
+        if (htmlPart) {
+          const { content } = await client.download(msg.seq.toString(), htmlPart.part, { uid: false });
+          bodyHtml = await streamToString(content);
+          bodyText = stripHtml(bodyHtml);
+        }
 
-        if (preferredPart) {
-          const { content } = await client.download(msg.seq.toString(), preferredPart.part, { uid: false });
-          const raw = await streamToString(content);
-          bodyText = preferredPart.type === "html" ? stripHtml(raw) : raw;
+        // If no HTML or empty, try plain text
+        if (!bodyText && plainPart) {
+          const { content } = await client.download(msg.seq.toString(), plainPart.part, { uid: false });
+          bodyText = await streamToString(content);
         }
 
         // Fallback: try all text parts
@@ -213,6 +217,7 @@ async function main() {
             try {
               const { content } = await client.download(msg.seq.toString(), part.part, { uid: false });
               const raw = await streamToString(content);
+              if (part.type === "html" && !bodyHtml) bodyHtml = raw;
               const text = part.type === "html" ? stripHtml(raw) : raw;
               if (text.length > bodyText.length) {
                 bodyText = text;
@@ -229,6 +234,7 @@ async function main() {
           sender: env.from?.[0]?.address || "",
           senderName: env.from?.[0]?.name || "",
           bodyText: bodyText.trim(),
+          bodyHtml: bodyHtml,
           bodyPreview: bodyText.substring(0, 200).replace(/\s+/g, " ").trim(),
           receivedDate: env.date?.toISOString() || new Date().toISOString(),
           attachments,

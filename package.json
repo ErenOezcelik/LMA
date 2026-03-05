@@ -9,6 +9,7 @@
     "start": "node scripts/start-with-cron.js",
     "db:migrate": "npx prisma migrate dev",
     "db:seed": "node prisma/seed.js",
+    "db:import-emails": "node setup/import-emails.js",
     "db:studio": "npx prisma studio"
   },
   "dependencies": {

@@ -1,6 +1,12 @@
 import { Link } from "react-router";
 
-export default function EmailCard({ email }) {
+const bucketLabels = {
+  tradion: { label: "Tradion", color: "bg-blue-100 text-blue-700" },
+  staubfilter: { label: "Staubfilter", color: "bg-emerald-100 text-emerald-700" },
+  rest: { label: "Rest", color: "bg-stone-100 text-stone-500" },
+};
+
+export default function EmailCard({ email, showBucket }) {
   const importanceColor =
     email.importanceScore >= 0.8
       ? "bg-red-500"
@@ -31,9 +37,19 @@ export default function EmailCard({ email }) {
           <p className="mt-1 text-xs text-stone-400 line-clamp-2">{email.bodyPreview}</p>
         </div>
       </div>
-      {email.correctedBucket && (
-        <div className="mt-2 text-xs text-amber-600">
-          Korrigiert
+      {(showBucket || email.correctedBucket) && (
+        <div className="mt-2 flex items-center gap-2">
+          {showBucket && (() => {
+            const b = bucketLabels[email.correctedBucket || email.bucket];
+            return b ? (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${b.color}`}>
+                {b.label}
+              </span>
+            ) : null;
+          })()}
+          {email.correctedBucket && (
+            <span className="text-xs text-amber-600">Korrigiert</span>
+          )}
         </div>
       )}
     </Link>

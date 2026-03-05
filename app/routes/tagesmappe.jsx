@@ -1,13 +1,12 @@
 import { useLoaderData, Link, useFetcher } from "react-router";
 import { prisma } from "../lib/db.server.js";
 import DayHeader from "../components/DayHeader.jsx";
-import EscalationBar from "../components/EscalationBar.jsx";
 import BucketColumn from "../components/BucketColumn.jsx";
 
 export function meta() {
   return [
-    { title: "KI-Tagesmappe" },
-    { name: "description", content: "E-Mail Klassifikation für die Geschäftsführung" },
+    { title: "Tagesmappe — KI-Tagesmappe" },
+    { name: "description", content: "Relevante E-Mails nach Bereich sortiert" },
   ];
 }
 
@@ -27,11 +26,11 @@ export async function loader({ request }) {
         gte: startOfDay,
         lte: endOfDay,
       },
+      isEscalated: true,
     },
     orderBy: { receivedDate: "desc" },
   });
 
-  const escalated = emails.filter((e) => e.isEscalated);
   const tradion = emails.filter((e) => (e.correctedBucket || e.bucket) === "tradion");
   const staubfilter = emails.filter((e) => (e.correctedBucket || e.bucket) === "staubfilter");
   const rest = emails.filter((e) => (e.correctedBucket || e.bucket) === "rest");
@@ -41,7 +40,6 @@ export async function loader({ request }) {
   return {
     date: startOfDay.toISOString(),
     totalCount: emails.length,
-    escalated,
     tradion,
     staubfilter,
     rest,
@@ -50,7 +48,7 @@ export async function loader({ request }) {
 }
 
 export default function Home() {
-  const { date, totalCount, escalated, tradion, staubfilter, rest, syncStatus } =
+  const { date, totalCount, tradion, staubfilter, rest, syncStatus } =
     useLoaderData();
   const syncFetcher = useFetcher();
   const isSyncing = syncFetcher.state !== "idle";
@@ -66,8 +64,11 @@ export default function Home() {
           onSync={() => syncFetcher.submit({}, { method: "post", action: "/api/sync" })}
         />
 
-        {escalated.length > 0 && (
-          <EscalationBar emails={escalated} />
+        {totalCount === 0 && (
+          <div className="text-center py-16 text-stone-400 mt-8">
+            <p className="text-lg">Keine relevanten E-Mails für diesen Tag</p>
+            <p className="text-sm mt-1">E-Mails im Eingang als relevant markieren</p>
+          </div>
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8">

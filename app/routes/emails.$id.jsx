@@ -108,9 +108,25 @@ export default function EmailDetail() {
 
           {/* Email body */}
           <div className="p-6">
-            <pre className="whitespace-pre-wrap font-sans text-sm text-stone-700 leading-relaxed">
-              {email.bodyText}
-            </pre>
+            {email.bodyHtml ? (
+              <iframe
+                srcDoc={email.bodyHtml}
+                sandbox=""
+                title="E-Mail Inhalt"
+                className="w-full border-0"
+                style={{ minHeight: "400px" }}
+                onLoad={(e) => {
+                  const doc = e.target.contentDocument;
+                  if (doc) {
+                    e.target.style.height = doc.documentElement.scrollHeight + "px";
+                  }
+                }}
+              />
+            ) : (
+              <pre className="whitespace-pre-wrap font-sans text-sm text-stone-700 leading-relaxed">
+                {email.bodyText}
+              </pre>
+            )}
           </div>
 
           {/* Correction section */}

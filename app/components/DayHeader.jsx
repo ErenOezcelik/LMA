@@ -1,5 +1,3 @@
-import { Link } from "react-router";
-
 export default function DayHeader({ date, totalCount, isSyncing, syncStatus, onSync }) {
   const dateObj = new Date(date);
   const formatted = dateObj.toLocaleDateString("de-DE", {
@@ -28,12 +26,6 @@ export default function DayHeader({ date, totalCount, isSyncing, syncStatus, onS
         </p>
       </div>
       <div className="flex items-center gap-3">
-        <Link
-          to="/settings"
-          className="px-3 py-2 text-sm text-stone-500 hover:text-stone-900 transition-colors"
-        >
-          Einstellungen
-        </Link>
         <button
           onClick={onSync}
           disabled={isSyncing}
