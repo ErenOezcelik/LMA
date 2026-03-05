@@ -7,4 +7,5 @@ export default [
   route("settings", "routes/settings.jsx"),
   route("api/sync", "routes/api.sync.jsx"),
   route("api/correct", "routes/api.correct.jsx"),
+  route("api/classify", "routes/api.classify.jsx"),
 ];

@@ -1,5 +1,5 @@
 import { prisma } from "./db.server.js";
-import { fetchEmails } from "./ews.server.js";
+import { fetchEmails } from "./imap.server.js";
 import { classifyEmail } from "./classifier.server.js";
 
 const BATCH_SIZE = 10;
@@ -61,6 +61,7 @@ export async function syncEmails() {
             sender: email.sender,
             senderName: email.senderName,
             bodyText: email.bodyText,
+            bodyHtml: email.bodyHtml || "",
             bodyPreview: email.bodyPreview,
             receivedDate: email.receivedDate,
             bucket: classification.bucket,

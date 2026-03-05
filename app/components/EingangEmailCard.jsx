@@ -2,11 +2,15 @@ import { Link, useFetcher } from "react-router";
 
 export default function EingangEmailCard({ email }) {
   const fetcher = useFetcher();
+  const aiFetcher = useFetcher();
 
-  const activeBucket = fetcher.formData?.get("bucket") || email.correctedBucket || email.bucket;
+  const isClassifying = aiFetcher.state !== "idle";
+  const aiResult = aiFetcher.data;
+
+  const activeBucket = fetcher.formData?.get("bucket") || aiResult?.bucket || email.correctedBucket || email.bucket;
   const isRelevant = fetcher.formData?.has("relevance")
     ? fetcher.formData.get("relevance") === "true"
-    : email.isEscalated;
+    : aiResult?.importanceScore >= 0.8 ? true : email.isEscalated;
 
   const time = new Date(email.receivedDate).toLocaleTimeString("de-DE", {
     hour: "2-digit",
@@ -41,6 +45,23 @@ export default function EingangEmailCard({ email }) {
 
       {/* Action buttons */}
       <div className="mt-3 flex items-center gap-2 flex-wrap">
+        {/* AI classify */}
+        <button
+          onClick={() => aiFetcher.submit({ emailId: email.id }, { method: "post", action: "/api/classify" })}
+          disabled={isClassifying}
+          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+            isClassifying
+              ? "bg-violet-100 text-violet-400 border-violet-200 animate-pulse"
+              : aiResult?.success
+                ? "bg-violet-100 text-violet-600 border-violet-200"
+                : "bg-white text-violet-500 border-stone-200 hover:border-violet-300 hover:bg-violet-50"
+          }`}
+        >
+          {isClassifying ? "..." : "AI"}
+        </button>
+
+        <span className="w-px h-5 bg-stone-200 mx-1" />
+
         {/* Relevance */}
         <button
           onClick={() => submit({ emailId: email.id, relevance: "true" })}
@@ -97,6 +118,11 @@ export default function EingangEmailCard({ email }) {
           Rest
         </button>
       </div>
+
+      {/* AI reasoning */}
+      {aiResult?.reasoning && (
+        <p className="mt-2 text-xs text-violet-500 italic">{aiResult.reasoning}</p>
+      )}
     </div>
   );
 }
