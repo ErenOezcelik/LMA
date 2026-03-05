@@ -1,0 +1,62 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Email {
+  id              String    @id @default(cuid())
+  exchangeId      String    @unique
+  subject         String
+  sender          String
+  senderName      String    @default("")
+  bodyText        String
+  bodyPreview     String    @default("")
+  receivedDate    DateTime
+  bucket          String
+  importanceScore Float     @default(0)
+  isEscalated     Boolean   @default(false)
+  correctedBucket String?
+  correctedAt     DateTime?
+  correctedBy     String?
+  rawResponse     String?
+  classifiedAt    DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([receivedDate])
+  @@index([bucket])
+  @@index([isEscalated])
+}
+
+model ClassificationRule {
+  id        String   @id @default(cuid())
+  bucket    String
+  ruleText  String
+  isActive  Boolean  @default(true)
+  priority  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CorrectionLog {
+  id              String   @id @default(cuid())
+  emailId         String
+  originalBucket  String
+  correctedBucket String
+  emailSubject    String
+  emailSender     String
+  reason          String?
+  createdAt       DateTime @default(now())
+}
+
+model SyncStatus {
+  id            String   @id @default("singleton")
+  lastSyncAt    DateTime?
+  lastSyncCount Int      @default(0)
+  isRunning     Boolean  @default(false)
+  updatedAt     DateTime @updatedAt
+}
