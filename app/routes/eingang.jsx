@@ -1,6 +1,25 @@
 import { useLoaderData, useSearchParams, useFetcher, useNavigation } from "react-router";
+import { useState, useEffect, useCallback } from "react";
 import { prisma } from "../lib/db.server.js";
 import EingangEmailCard from "../components/EingangEmailCard.jsx";
+
+const PAGE_SIZE = 50;
+
+// Only select fields needed for the card — skip bodyText/bodyHtml
+const EMAIL_SELECT = {
+  id: true,
+  exchangeId: true,
+  subject: true,
+  sender: true,
+  senderName: true,
+  bodyPreview: true,
+  receivedDate: true,
+  bucket: true,
+  correctedBucket: true,
+  importanceScore: true,
+  isEscalated: true,
+  rawResponse: true,
+};
 
 export function meta() {
   return [
@@ -41,40 +60,77 @@ export async function loader({ request }) {
 
   const fromParam = url.searchParams.get("from") || defaults.from;
   const toParam = url.searchParams.get("to") || defaults.to;
+  const page = parseInt(url.searchParams.get("page") || "1", 10);
 
   const fromDate = new Date(fromParam);
   const toDate = new Date(toParam);
 
-  const syncStatus = await prisma.syncStatus.findUnique({ where: { id: "singleton" } });
+  const where = {
+    receivedDate: { gte: fromDate, lte: toDate },
+  };
 
-  const emails = await prisma.email.findMany({
-    where: {
-      receivedDate: {
-        gte: fromDate,
-        lte: toDate,
-      },
-    },
-    orderBy: { receivedDate: "desc" },
-  });
+  const [emails, totalCount, syncStatus] = await Promise.all([
+    prisma.email.findMany({
+      where,
+      select: EMAIL_SELECT,
+      orderBy: { receivedDate: "desc" },
+      take: PAGE_SIZE,
+      skip: (page - 1) * PAGE_SIZE,
+    }),
+    prisma.email.count({ where }),
+    prisma.syncStatus.findUnique({ where: { id: "singleton" } }),
+  ]);
 
   return {
     emails,
     from: fromParam,
     to: toParam,
-    totalCount: emails.length,
+    totalCount,
+    page,
+    hasMore: page * PAGE_SIZE < totalCount,
     lastSync: syncStatus?.lastSyncAt?.toISOString() || null,
     isSyncRunning: syncStatus?.isRunning || false,
   };
 }
 
 export default function Eingang() {
-  const { emails, from, to, totalCount, lastSync, isSyncRunning } = useLoaderData();
+  const data = useLoaderData();
   const [, setSearchParams] = useSearchParams();
   const syncFetcher = useFetcher();
-
+  const moreFetcher = useFetcher();
   const navigation = useNavigation();
+
   const isNavigating = navigation.state === "loading";
-  const isSyncing = syncFetcher.state !== "idle" || isSyncRunning;
+  const isSyncing = syncFetcher.state !== "idle" || data.isSyncRunning;
+
+  // Accumulate emails across pages
+  const [allEmails, setAllEmails] = useState(data.emails);
+  const [currentPage, setCurrentPage] = useState(data.page);
+  const [hasMore, setHasMore] = useState(data.hasMore);
+
+  // Reset when loader data changes (new date range)
+  useEffect(() => {
+    setAllEmails(data.emails);
+    setCurrentPage(data.page);
+    setHasMore(data.hasMore);
+  }, [data.from, data.to, data.emails]);
+
+  // Append when more pages load
+  useEffect(() => {
+    if (moreFetcher.data?.emails) {
+      setAllEmails((prev) => [...prev, ...moreFetcher.data.emails]);
+      setCurrentPage(moreFetcher.data.page);
+      setHasMore(moreFetcher.data.hasMore);
+    }
+  }, [moreFetcher.data]);
+
+  const isLoadingMore = moreFetcher.state !== "idle";
+
+  const loadMore = useCallback(() => {
+    if (isLoadingMore || !hasMore) return;
+    const nextPage = currentPage + 1;
+    moreFetcher.load(`/?from=${data.from}&to=${data.to}&page=${nextPage}`);
+  }, [isLoadingMore, hasMore, currentPage, data.from, data.to]);
 
   function handleShow(e) {
     e.preventDefault();
@@ -89,8 +145,8 @@ export default function Eingang() {
     syncFetcher.submit(null, { method: "post", action: "/api/sync" });
   }
 
-  const lastSyncText = lastSync
-    ? new Date(lastSync).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })
+  const lastSyncText = data.lastSync
+    ? new Date(data.lastSync).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })
     : "noch nie";
 
   return (
@@ -107,7 +163,7 @@ export default function Eingang() {
               id="from"
               name="from"
               step="300"
-              defaultValue={from}
+              defaultValue={data.from}
               className="px-3 py-2 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-900/10"
             />
           </div>
@@ -120,7 +176,7 @@ export default function Eingang() {
               id="to"
               name="to"
               step="300"
-              defaultValue={to}
+              defaultValue={data.to}
               className="px-3 py-2 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-900/10"
             />
           </div>
@@ -138,7 +194,7 @@ export default function Eingang() {
             )}
           </button>
           <span className="text-sm text-stone-400 ml-auto">
-            {totalCount} E-Mail{totalCount !== 1 ? "s" : ""}
+            {data.totalCount} E-Mail{data.totalCount !== 1 ? "s" : ""}
           </span>
         </form>
 
@@ -163,17 +219,38 @@ export default function Eingang() {
         </div>
 
         {/* Content */}
-        {emails.length === 0 ? (
+        {allEmails.length === 0 ? (
           <div className="text-center py-16 text-stone-400">
             <p className="text-lg">Keine E-Mails in diesem Zeitraum</p>
             <p className="text-sm mt-2">E-Mails werden automatisch alle 5 Minuten synchronisiert</p>
           </div>
         ) : (
-          <div className="space-y-3">
-            {emails.map((email) => (
-              <EingangEmailCard key={email.id} email={email} />
-            ))}
-          </div>
+          <>
+            <div className="space-y-3">
+              {allEmails.map((email) => (
+                <EingangEmailCard key={email.id} email={email} />
+              ))}
+            </div>
+
+            {hasMore && (
+              <div className="mt-6 text-center">
+                <button
+                  onClick={loadMore}
+                  disabled={isLoadingMore}
+                  className="px-6 py-2.5 text-sm font-medium text-stone-700 bg-white border border-stone-200 rounded-lg hover:bg-stone-50 transition-colors disabled:opacity-50"
+                >
+                  {isLoadingMore ? (
+                    <span className="flex items-center gap-2">
+                      <span className="w-3.5 h-3.5 border-2 border-stone-300 border-t-stone-700 rounded-full animate-spin" />
+                      Laden...
+                    </span>
+                  ) : (
+                    `Weitere laden (${data.totalCount - allEmails.length} verbleibend)`
+                  )}
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
