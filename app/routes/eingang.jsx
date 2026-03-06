@@ -200,7 +200,7 @@ export default function Eingang() {
 
         {/* Pagination top */}
         {totalPages > 1 && (
-          <Pagination page={page} totalPages={totalPages} goToPage={goToPage} />
+          <Pagination page={page} totalPages={totalPages} goToPage={goToPage} className="mb-6" />
         )}
 
         {/* Content */}
