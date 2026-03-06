@@ -1,4 +1,5 @@
 import { useLoaderData, useSearchParams, useFetcher, useNavigation } from "react-router";
+import { useEffect } from "react";
 import { prisma } from "../lib/db.server.js";
 import EingangEmailCard from "../components/EingangEmailCard.jsx";
 
@@ -101,6 +102,26 @@ export default function Eingang() {
 
   const isNavigating = navigation.state === "loading";
   const isSyncing = syncFetcher.state !== "idle" || isSyncRunning;
+
+  // Persist selected range in sessionStorage
+  useEffect(() => {
+    if (from && to) {
+      sessionStorage.setItem("eingang_from", from);
+      sessionStorage.setItem("eingang_to", to);
+    }
+  }, [from, to]);
+
+  // Restore range from sessionStorage on mount if no URL params
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (!urlParams.has("from")) {
+      const savedFrom = sessionStorage.getItem("eingang_from");
+      const savedTo = sessionStorage.getItem("eingang_to");
+      if (savedFrom && savedTo) {
+        setSearchParams({ from: savedFrom, to: savedTo }, { replace: true });
+      }
+    }
+  }, []);
 
   function handleShow(e) {
     e.preventDefault();
