@@ -1,6 +1,5 @@
-import { useLoaderData, useFetcher, Link } from "react-router";
+import { useLoaderData, Link } from "react-router";
 import { prisma } from "../lib/db.server.js";
-import BucketSelector from "../components/BucketSelector.jsx";
 
 export function meta({ data }) {
   return [{ title: data ? `${data.email.subject} — KI-Tagesmappe` : "E-Mail" }];
@@ -16,9 +15,7 @@ export async function loader({ params }) {
 
 export default function EmailDetail() {
   const { email } = useLoaderData();
-  const fetcher = useFetcher();
   const currentBucket = email.correctedBucket || email.bucket;
-  const isSaving = fetcher.state !== "idle";
 
   const bucketLabels = {
     tradion: "Tradion",
@@ -129,35 +126,6 @@ export default function EmailDetail() {
             )}
           </div>
 
-          {/* Correction section */}
-          <div className="p-6 border-t border-stone-100 bg-stone-50/50">
-            <h3 className="text-sm font-medium text-stone-700 mb-3">Klassifikation ändern</h3>
-            <fetcher.Form method="post" action="/api/correct">
-              <input type="hidden" name="emailId" value={email.id} />
-              <div className="flex items-end gap-3">
-                <BucketSelector currentBucket={currentBucket} />
-                <input
-                  type="text"
-                  name="reason"
-                  placeholder="Grund (optional)"
-                  className="flex-1 text-sm px-3 py-2 rounded-lg border border-stone-200 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-300"
-                />
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="px-4 py-2 text-sm font-medium text-white bg-stone-900 rounded-lg hover:bg-stone-800 transition-colors disabled:opacity-50"
-                >
-                  {isSaving ? "Speichern..." : "Speichern"}
-                </button>
-              </div>
-            </fetcher.Form>
-            {email.correctedBucket && (
-              <p className="mt-2 text-xs text-stone-400">
-                Korrigiert am{" "}
-                {new Date(email.correctedAt).toLocaleString("de-DE")} — Original: {bucketLabels[email.bucket]}
-              </p>
-            )}
-          </div>
         </div>
       </div>
     </div>

@@ -1,13 +1,15 @@
+import { useState } from "react";
 import { Link, useFetcher } from "react-router";
 
 export default function EingangEmailCard({ email }) {
   const fetcher = useFetcher();
   const aiFetcher = useFetcher();
+  const [showComment, setShowComment] = useState(false);
+  const [comment, setComment] = useState("");
 
   const isClassifying = aiFetcher.state !== "idle";
   const aiResult = aiFetcher.data;
 
-  // Parse persisted AI reasoning from rawResponse
   let persistedReasoning = null;
   if (email.rawResponse) {
     try {
@@ -36,6 +38,15 @@ export default function EingangEmailCard({ email }) {
 
   function submit(data) {
     fetcher.submit(data, { method: "post", action: "/api/correct" });
+  }
+
+  function submitWithComment(data) {
+    if (comment.trim()) {
+      data.reason = comment.trim();
+    }
+    submit(data);
+    setComment("");
+    setShowComment(false);
   }
 
   return (
@@ -76,7 +87,7 @@ export default function EingangEmailCard({ email }) {
 
         {/* Relevance */}
         <button
-          onClick={() => submit({ emailId: email.id, relevance: "true" })}
+          onClick={() => submitWithComment({ emailId: email.id, relevance: "true" })}
           className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
             isRelevant
               ? "bg-amber-500 text-white border-amber-500"
@@ -86,7 +97,7 @@ export default function EingangEmailCard({ email }) {
           Relevant
         </button>
         <button
-          onClick={() => submit({ emailId: email.id, relevance: "false" })}
+          onClick={() => submitWithComment({ emailId: email.id, relevance: "false" })}
           className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
             !isRelevant
               ? "bg-stone-200 text-stone-700 border-stone-200"
@@ -100,7 +111,7 @@ export default function EingangEmailCard({ email }) {
 
         {/* Buckets */}
         <button
-          onClick={() => submit({ emailId: email.id, bucket: "tradion" })}
+          onClick={() => submitWithComment({ emailId: email.id, bucket: "tradion" })}
           className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
             activeBucket === "tradion"
               ? "bg-blue-500 text-white border-blue-500"
@@ -110,7 +121,7 @@ export default function EingangEmailCard({ email }) {
           Tradion
         </button>
         <button
-          onClick={() => submit({ emailId: email.id, bucket: "staubfilter" })}
+          onClick={() => submitWithComment({ emailId: email.id, bucket: "staubfilter" })}
           className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
             activeBucket === "staubfilter"
               ? "bg-emerald-500 text-white border-emerald-500"
@@ -120,7 +131,7 @@ export default function EingangEmailCard({ email }) {
           Staubfilter
         </button>
         <button
-          onClick={() => submit({ emailId: email.id, bucket: "rest" })}
+          onClick={() => submitWithComment({ emailId: email.id, bucket: "rest" })}
           className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
             activeBucket === "rest"
               ? "bg-stone-500 text-white border-stone-500"
@@ -129,7 +140,40 @@ export default function EingangEmailCard({ email }) {
         >
           Rest
         </button>
+
+        <span className="w-px h-5 bg-stone-200 mx-1" />
+
+        {/* Comment toggle */}
+        <button
+          onClick={() => setShowComment(!showComment)}
+          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+            showComment
+              ? "bg-stone-100 text-stone-700 border-stone-300"
+              : "bg-white text-stone-400 border-stone-200 hover:border-stone-300 hover:text-stone-600"
+          }`}
+        >
+          Kommentar
+        </button>
       </div>
+
+      {/* Comment input */}
+      {showComment && (
+        <div className="mt-2">
+          <input
+            type="text"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Regel oder Kommentar zur Klassifikation..."
+            className="w-full text-xs px-3 py-2 rounded-lg border border-stone-200 bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-900/10 focus:bg-white"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && comment.trim()) {
+                submitWithComment({ emailId: email.id, bucket: activeBucket });
+              }
+            }}
+          />
+          <p className="mt-1 text-[10px] text-stone-400">Enter oder Bucket/Relevanz klicken zum Speichern</p>
+        </div>
+      )}
 
       {/* KI reasoning */}
       {reasoning && (

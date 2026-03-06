@@ -1,11 +1,9 @@
 import { useLoaderData, useSearchParams, useFetcher, useNavigation } from "react-router";
-import { useState, useEffect, useCallback } from "react";
 import { prisma } from "../lib/db.server.js";
 import EingangEmailCard from "../components/EingangEmailCard.jsx";
 
 const PAGE_SIZE = 50;
 
-// Only select fields needed for the card — skip bodyText/bodyHtml
 const EMAIL_SELECT = {
   id: true,
   exchangeId: true,
@@ -81,56 +79,28 @@ export async function loader({ request }) {
     prisma.syncStatus.findUnique({ where: { id: "singleton" } }),
   ]);
 
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+
   return {
     emails,
     from: fromParam,
     to: toParam,
     totalCount,
     page,
-    hasMore: page * PAGE_SIZE < totalCount,
+    totalPages,
     lastSync: syncStatus?.lastSyncAt?.toISOString() || null,
     isSyncRunning: syncStatus?.isRunning || false,
   };
 }
 
 export default function Eingang() {
-  const data = useLoaderData();
+  const { emails, from, to, totalCount, page, totalPages, lastSync, isSyncRunning } = useLoaderData();
   const [, setSearchParams] = useSearchParams();
   const syncFetcher = useFetcher();
-  const moreFetcher = useFetcher();
   const navigation = useNavigation();
 
   const isNavigating = navigation.state === "loading";
-  const isSyncing = syncFetcher.state !== "idle" || data.isSyncRunning;
-
-  // Accumulate emails across pages
-  const [allEmails, setAllEmails] = useState(data.emails);
-  const [currentPage, setCurrentPage] = useState(data.page);
-  const [hasMore, setHasMore] = useState(data.hasMore);
-
-  // Reset when loader data changes (new date range)
-  useEffect(() => {
-    setAllEmails(data.emails);
-    setCurrentPage(data.page);
-    setHasMore(data.hasMore);
-  }, [data.from, data.to, data.emails]);
-
-  // Append when more pages load
-  useEffect(() => {
-    if (moreFetcher.data?.emails) {
-      setAllEmails((prev) => [...prev, ...moreFetcher.data.emails]);
-      setCurrentPage(moreFetcher.data.page);
-      setHasMore(moreFetcher.data.hasMore);
-    }
-  }, [moreFetcher.data]);
-
-  const isLoadingMore = moreFetcher.state !== "idle";
-
-  const loadMore = useCallback(() => {
-    if (isLoadingMore || !hasMore) return;
-    const nextPage = currentPage + 1;
-    moreFetcher.load(`/?from=${data.from}&to=${data.to}&page=${nextPage}`);
-  }, [isLoadingMore, hasMore, currentPage, data.from, data.to]);
+  const isSyncing = syncFetcher.state !== "idle" || isSyncRunning;
 
   function handleShow(e) {
     e.preventDefault();
@@ -141,13 +111,23 @@ export default function Eingang() {
     });
   }
 
+  function goToPage(p) {
+    setSearchParams({ from, to, page: String(p) });
+  }
+
   function handleManualSync() {
     syncFetcher.submit(null, { method: "post", action: "/api/sync" });
   }
 
-  const lastSyncText = data.lastSync
-    ? new Date(data.lastSync).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })
+  const lastSyncText = lastSync
+    ? new Date(lastSync).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })
     : "noch nie";
+
+  // Build page numbers to show
+  const pageNumbers = [];
+  for (let i = 1; i <= totalPages; i++) {
+    pageNumbers.push(i);
+  }
 
   return (
     <div className="min-h-screen">
@@ -163,7 +143,7 @@ export default function Eingang() {
               id="from"
               name="from"
               step="300"
-              defaultValue={data.from}
+              defaultValue={from}
               className="px-3 py-2 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-900/10"
             />
           </div>
@@ -176,7 +156,7 @@ export default function Eingang() {
               id="to"
               name="to"
               step="300"
-              defaultValue={data.to}
+              defaultValue={to}
               className="px-3 py-2 text-sm bg-white border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-900/10"
             />
           </div>
@@ -194,7 +174,7 @@ export default function Eingang() {
             )}
           </button>
           <span className="text-sm text-stone-400 ml-auto">
-            {data.totalCount} E-Mail{data.totalCount !== 1 ? "s" : ""}
+            {totalCount} E-Mail{totalCount !== 1 ? "s" : ""}
           </span>
         </form>
 
@@ -218,41 +198,82 @@ export default function Eingang() {
           </button>
         </div>
 
+        {/* Pagination top */}
+        {totalPages > 1 && (
+          <Pagination page={page} totalPages={totalPages} goToPage={goToPage} />
+        )}
+
         {/* Content */}
-        {allEmails.length === 0 ? (
+        {emails.length === 0 ? (
           <div className="text-center py-16 text-stone-400">
             <p className="text-lg">Keine E-Mails in diesem Zeitraum</p>
             <p className="text-sm mt-2">E-Mails werden automatisch alle 5 Minuten synchronisiert</p>
           </div>
         ) : (
-          <>
-            <div className="space-y-3">
-              {allEmails.map((email) => (
-                <EingangEmailCard key={email.id} email={email} />
-              ))}
-            </div>
+          <div className="space-y-3">
+            {emails.map((email) => (
+              <EingangEmailCard key={email.id} email={email} />
+            ))}
+          </div>
+        )}
 
-            {hasMore && (
-              <div className="mt-6 text-center">
-                <button
-                  onClick={loadMore}
-                  disabled={isLoadingMore}
-                  className="px-6 py-2.5 text-sm font-medium text-stone-700 bg-white border border-stone-200 rounded-lg hover:bg-stone-50 transition-colors disabled:opacity-50"
-                >
-                  {isLoadingMore ? (
-                    <span className="flex items-center gap-2">
-                      <span className="w-3.5 h-3.5 border-2 border-stone-300 border-t-stone-700 rounded-full animate-spin" />
-                      Laden...
-                    </span>
-                  ) : (
-                    `Weitere laden (${data.totalCount - allEmails.length} verbleibend)`
-                  )}
-                </button>
-              </div>
-            )}
-          </>
+        {/* Pagination bottom */}
+        {totalPages > 1 && (
+          <Pagination page={page} totalPages={totalPages} goToPage={goToPage} className="mt-6" />
         )}
       </div>
+    </div>
+  );
+}
+
+function Pagination({ page, totalPages, goToPage, className = "" }) {
+  // Show max 7 page buttons with ellipsis
+  const pages = [];
+  if (totalPages <= 7) {
+    for (let i = 1; i <= totalPages; i++) pages.push(i);
+  } else {
+    pages.push(1);
+    if (page > 3) pages.push("...");
+    for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) {
+      pages.push(i);
+    }
+    if (page < totalPages - 2) pages.push("...");
+    pages.push(totalPages);
+  }
+
+  return (
+    <div className={`flex items-center justify-center gap-1 ${className}`}>
+      <button
+        onClick={() => goToPage(page - 1)}
+        disabled={page <= 1}
+        className="px-2.5 py-1.5 text-xs font-medium text-stone-500 bg-white border border-stone-200 rounded-md hover:bg-stone-50 disabled:opacity-30 disabled:cursor-not-allowed"
+      >
+        &larr;
+      </button>
+      {pages.map((p, i) =>
+        p === "..." ? (
+          <span key={`ellipsis-${i}`} className="px-1.5 text-xs text-stone-400">...</span>
+        ) : (
+          <button
+            key={p}
+            onClick={() => goToPage(p)}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-colors ${
+              p === page
+                ? "bg-stone-900 text-white border-stone-900"
+                : "bg-white text-stone-600 border-stone-200 hover:bg-stone-50"
+            }`}
+          >
+            {p}
+          </button>
+        )
+      )}
+      <button
+        onClick={() => goToPage(page + 1)}
+        disabled={page >= totalPages}
+        className="px-2.5 py-1.5 text-xs font-medium text-stone-500 bg-white border border-stone-200 rounded-md hover:bg-stone-50 disabled:opacity-30 disabled:cursor-not-allowed"
+      >
+        &rarr;
+      </button>
     </div>
   );
 }
