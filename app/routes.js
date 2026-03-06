@@ -9,5 +9,4 @@ export default [
   route("api/sync", "routes/api.sync.jsx"),
   route("api/correct", "routes/api.correct.jsx"),
   route("api/classify", "routes/api.classify.jsx"),
-  route("api/tagesmappe-html", "routes/api.tagesmappe-html.jsx"),
 ];
