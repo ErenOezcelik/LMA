@@ -60,18 +60,6 @@ export default function App() {
             Eingang
           </NavLink>
           <NavLink
-            to="/relevant"
-            className={({ isActive }) =>
-              `px-3 py-1.5 text-sm rounded-md transition-colors ${
-                isActive
-                  ? "bg-stone-900 text-white"
-                  : "text-stone-500 hover:text-stone-900 hover:bg-stone-100"
-              }`
-            }
-          >
-            Relevant
-          </NavLink>
-          <NavLink
             to="/tagesmappe"
             className={({ isActive }) =>
               `px-3 py-1.5 text-sm rounded-md transition-colors ${
